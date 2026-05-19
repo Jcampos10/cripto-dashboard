@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crypto Dashboard — Análisis Global de Mercado</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getDatabase, ref, set, get, onValue, push } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+  import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+  // ─── CONFIGURA TU FIREBASE AQUÍ ───────────────────────────────────────────
+  const firebaseConfig = {
+    apiKey: "AIzaSyDdUBB4yMHhUL_TMuc0qx_WweHON3TCK8I",
+    authDomain: "dashboard-cripto-53ea6.firebaseapp.com",
+    databaseURL: "https://dashboard-cripto-53ea6-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "dashboard-cripto-53ea6",
+    storageBucket: "dashboard-cripto-53ea6.firebasestorage.app",
+    messagingSenderId: "310927364843",
+    appId: "1:310927364843:web:291c2c24212acc323da4ae"
+  };
+  // ──────────────────────────────────────────────────────────────────────────
+
+  let db, auth, currentUserId;
+  let drawingsData = {};
+
+  try {
+    const app = initializeApp(firebaseConfig);
+    db = getDatabase(app);
+    auth = getAuth(app);
+
+    signInAnonymously(auth).catch((e) => {
+      console.warn("Firebase auth error:", e.message);
+      window._firebaseReady = false;
+    });
+
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        currentUserId = user.uid;
+        window._firebaseReady = true;
+
+        // Registrar sesión
+        const sessionRef = ref(db, 'sessions/' + Date.now());
+        set(sessionRef, {
+          userId: currentUserId,
+          timestamp: new Date().toISOString(),
+          userAgent: navigator.userAgent.substring(0, 100)
+        });
+
+        // Cargar sesiones
+        const sessionsRef = ref(db, 'sessions');
+        onValue(sessionsRef, (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+            const count = Object.keys(data).length;
+            const el = document.getElementById('session-count');
+            if (el) el.textContent = count + ' sesiones registradas';
+          }
+        });
+
+        // Cargar y sincronizar dibujos de TradingView
+        const drawingsRef = ref(db, 'tv_drawings');
+        onValue(drawingsRef, (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+            drawingsData = data;
+            updateDrawingsUI(data);
+          }
+        });
+
+        console.log("✅ Firebase conectado. Usuario:", currentUserId);
+      }
+    });
+
+    window.saveDrawings = function(widgetId, drawingJson) {
+      if (!db || !currentUserId) return;
+      const drawRef = ref(db, 'tv_drawings/' + widgetId);
+      set(drawRef, {
+        data: drawingJson,
+        savedBy: currentUserId,
+        timestamp: new Date().toISOString()
+      }).then(() => {
+        showToast('Dibujos guardados en la nube ✓');
+      });
+    };
+
+    window.loadDrawings = function(widgetId) {
+      return drawingsData[widgetId] ? drawingsData[widgetId].data : null;
+    };
+
+  } catch(e) {
+    console.warn("Firebase no configurado:", e.message);
+    window._firebaseReady = false;
+    window.saveDrawings = () => {};
+    window.loadDrawings = () => null;
+  }
+
+  function updateDrawingsUI(data) {
+    const lastSaved = Object.values(data)
+      .filter(d => d.timestamp)
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0];
+    if (lastSaved) {
+      const el = document.getElementById('last-saved');
+      if (el) el.textContent = 'Último guardado: ' + new Date(lastSaved.timestamp).toLocaleString('es-ES');
+    }
+  }
+</script>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg-void: #050c1a;
+    --bg-surface: #0a1628;
+    --bg-card: #0f1f35;
+    --bg-card-hover: #132540;
+    --bg-elevated: #162a42;
+    --border-subtle: rgba(56, 139, 253, 0.12);
+    --border-mid: rgba(56, 139, 253, 0.22);
+    --border-accent: rgba(56, 139, 253, 0.45);
+    --cyan: #00d4ff;
+    --cyan-dim: rgba(0, 212, 255, 0.15);
+    --gold: #f0c040;
+    --gold-dim: rgba(240, 192, 64, 0.15);
+    --green: #00e5a0;
+    --green-dim: rgba(0, 229, 160, 0.12);
+    --red: #ff4d6d;
+    --purple: #a78bfa;
+    --text-primary: #e8f0fe;
+    --text-secondary: #8ba4c8;
+    --text-muted: #4a6080;
+    --font-display: 'DM Serif Display', Georgia, serif;
+    --font-body: 'DM Sans', system-ui, sans-serif;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --radius-xl: 22px;
+    --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.4);
+    --shadow-glow: 0 0 30px rgba(0, 212, 255, 0.06);
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg-void);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Background grid pattern */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(56,139,253,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(56,139,253,0.03) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── HEADER ─────────────────────────────────────────── */
+  .header {
+    position: relative;
+    z-index: 10;
+    padding: 24px 28px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .header-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .logo-mark {
+    width: 42px; height: 42px;
+    background: linear-gradient(135deg, var(--cyan), #0080ff);
+    border-radius: var(--radius-md);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 700; color: #000;
+    flex-shrink: 0;
+    box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+  }
+
+  .header-title h1 {
+    font-family: var(--font-display);
+    font-size: 22px;
+    color: var(--text-primary);
+    letter-spacing: -0.3px;
+    line-height: 1.2;
+  }
+
+  .header-title p {
+    font-size: 12px;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+
+  .header-meta {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    padding: 6px 12px;
+    border-radius: 100px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  #last-saved, #session-count {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  /* ── STRIP DE MÉTRICAS ──────────────────────────────── */
+  .metrics-strip {
+    position: relative;
+    z-index: 10;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    padding: 20px 28px;
+    animation: fadeUp 0.6s ease both;
+  }
+
+  .metric-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    transition: border-color 0.2s, transform 0.2s;
+    cursor: default;
+  }
+
+  .metric-card:hover {
+    border-color: var(--border-accent);
+    transform: translateY(-2px);
+  }
+
+  .metric-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .metric-value {
+    font-family: var(--font-display);
+    font-size: 26px;
+    color: var(--text-primary);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .metric-value.cyan { color: var(--cyan); }
+  .metric-value.gold { color: var(--gold); }
+  .metric-value.green { color: var(--green); }
+  .metric-value.purple { color: var(--purple); }
+
+  .metric-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 100px;
+  }
+
+  .metric-badge.up { background: rgba(0,229,160,0.12); color: var(--green); }
+  .metric-badge.down { background: rgba(255,77,109,0.12); color: var(--red); }
+
+  /* ── SECCIÓN DE CHARTS ──────────────────────────────── */
+  .section {
+    position: relative;
+    z-index: 10;
+    padding: 0 28px 20px;
+  }
+
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .section-title h2 {
+    font-family: var(--font-display);
+    font-size: 16px;
+    color: var(--text-secondary);
+    font-weight: 400;
+    font-style: italic;
+  }
+
+  .section-line {
+    flex: 1;
+    height: 1px;
+    background: var(--border-subtle);
+  }
+
+  /* ── TV WIDGET CARDS ────────────────────────────────── */
+  .chart-grid-main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+
+  .chart-grid-secondary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+
+  .chart-grid-hype {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+
+  @media (max-width: 900px) {
+    .chart-grid-main,
+    .chart-grid-secondary,
+    .chart-grid-hype { grid-template-columns: 1fr; }
+  }
+
+  .tv-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    box-shadow: var(--shadow-card);
+    animation: fadeUp 0.5s ease both;
+  }
+
+  .tv-card:hover {
+    border-color: var(--border-mid);
+    box-shadow: var(--shadow-glow);
+  }
+
+  .tv-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+
+  .tv-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .ticker-badge {
+    font-size: 13px;
+    font-weight: 700;
+    font-family: var(--font-body);
+    letter-spacing: 0.04em;
+    color: var(--text-primary);
+  }
+
+  .ticker-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  .tv-tag {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 100px;
+    border: 1px solid;
+  }
+
+  .tv-tag.cyan { color: var(--cyan); border-color: rgba(0,212,255,0.3); background: var(--cyan-dim); }
+  .tv-tag.gold { color: var(--gold); border-color: rgba(240,192,64,0.3); background: var(--gold-dim); }
+  .tv-tag.green { color: var(--green); border-color: rgba(0,229,160,0.3); background: var(--green-dim); }
+  .tv-tag.purple { color: var(--purple); border-color: rgba(167,139,250,0.3); background: rgba(167,139,250,0.1); }
+
+  .tv-widget-wrap {
+    flex: 1;
+    position: relative;
+  }
+
+  .save-drawings-btn {
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+    z-index: 20;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-mid);
+    color: var(--cyan);
+    font-family: var(--font-body);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    transition: background 0.2s, border-color 0.2s;
+    letter-spacing: 0.04em;
+  }
+
+  .save-drawings-btn:hover {
+    background: var(--cyan-dim);
+    border-color: var(--border-accent);
+  }
+
+  /* ── TOAST ──────────────────────────────────────────── */
+  #toast {
+    position: fixed;
+    bottom: 80px;
+    right: 24px;
+    z-index: 9999;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-accent);
+    color: var(--cyan);
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 10px 18px;
+    border-radius: var(--radius-md);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.3s, transform 0.3s;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+
+  #toast.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ── FOOTER ─────────────────────────────────────────── */
+  .footer {
+    position: relative;
+    z-index: 10;
+    border-top: 1px solid var(--border-subtle);
+    padding: 18px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+  }
+
+  .footer-note {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  .footer-dev {
+    font-family: var(--font-display);
+    font-size: 14px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .footer-dev span {
+    color: var(--cyan);
+    font-style: italic;
+  }
+
+  /* ── ANIMATIONS ─────────────────────────────────────── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(18px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .tv-card:nth-child(1) { animation-delay: 0.05s; }
+  .tv-card:nth-child(2) { animation-delay: 0.10s; }
+  .tv-card:nth-child(3) { animation-delay: 0.15s; }
+  .tv-card:nth-child(4) { animation-delay: 0.20s; }
+  .tv-card:nth-child(5) { animation-delay: 0.25s; }
+  .tv-card:nth-child(6) { animation-delay: 0.30s; }
+
+  /* ── SCROLLBAR ──────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg-void); }
+  ::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <div class="header-brand">
+    <div class="logo-mark">₿</div>
+    <div class="header-title">
+      <h1>Dashboard de Mercado Cripto</h1>
+      <p>Análisis Global · Temporalidad 1W</p>
+    </div>
+  </div>
+  <div class="header-meta">
+    <div class="status-pill">
+      <div class="status-dot"></div>
+      <span>Mercado en vivo</span>
+    </div>
+    <div id="session-count" style="font-size:11px; color: var(--text-muted);"></div>
+    <div id="last-saved" style="font-size:11px; color: var(--text-muted);"></div>
+  </div>
+</header>
+
+<!-- METRICS STRIP -->
+<div class="metrics-strip">
+  <div class="metric-card">
+    <div class="metric-label">BTC Dominance</div>
+    <div class="metric-value cyan" id="m-btcd">—</div>
+    <div class="metric-badge up" id="m-btcd-b">▲ cargando</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Total Market Cap</div>
+    <div class="metric-value gold" id="m-total">—</div>
+    <div class="metric-badge up" id="m-total-b">▲ cargando</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">TOTAL2 (ex-BTC)</div>
+    <div class="metric-value green" id="m-total2">—</div>
+    <div class="metric-badge up" id="m-total2-b">▲ cargando</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">TOTAL3 (Alts)</div>
+    <div class="metric-value purple" id="m-total3">—</div>
+    <div class="metric-badge up" id="m-total3-b">▲ cargando</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">OTHERS</div>
+    <div class="metric-value" style="color:var(--red);" id="m-others">—</div>
+    <div class="metric-badge up" id="m-others-b">▲ cargando</div>
+  </div>
+</div>
+
+<!-- SECCIÓN PRINCIPAL: BTC/USDT (grande con indicadores) -->
+<div class="section">
+  <div class="section-title">
+    <h2>Bitcoin · BTC/USDT con Indicadores</h2>
+    <div class="section-line"></div>
+  </div>
+
+  <div class="tv-card" style="height: 680px;">
+    <div class="tv-card-header">
+      <div class="tv-card-title">
+        <span class="ticker-badge">BTCUSDT</span>
+        <span class="ticker-desc">· Binance · 1W · EMA 20w · SMA 21w · MACD · RSI · MVRV</span>
+      </div>
+      <span class="tv-tag cyan">BTC Principal</span>
+    </div>
+    <div class="tv-widget-wrap" style="height: 620px; flex: 1;">
+      <!-- TradingView Widget: BTC/USDT 1W con indicadores -->
+      <div class="tradingview-widget-container" id="container-btcusdt" style="height:620px;width:100%;position:relative;">
+        <div id="tv-btcusdt" style="height:620px;width:100%;"></div>
+      </div>
+      <button class="save-drawings-btn" onclick="saveCurrentDrawings('btcusdt')">
+        💾 Guardar dibujos
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- SECCIÓN: BTC DOMINANCE + TOTAL -->
+<div class="section">
+  <div class="section-title">
+    <h2>Dominancia &amp; Capitalización Total</h2>
+    <div class="section-line"></div>
+  </div>
+  <div class="chart-grid-main">
+
+    <!-- BTC.D -->
+    <div class="tv-card" style="height:460px;">
+      <div class="tv-card-header">
+        <div class="tv-card-title">
+          <span class="ticker-badge">BTC.D</span>
+          <span class="ticker-desc">· Dominancia de Bitcoin</span>
+        </div>
+        <span class="tv-tag cyan">Dominancia</span>
+      </div>
+      <div class="tv-widget-wrap" style="height:410px; flex:1;">
+        <div class="tradingview-widget-container" style="height:410px;width:100%;position:relative;">
+          <div id="tv-btcd" style="height:410px;width:100%;"></div>
+        </div>
+        <button class="save-drawings-btn" onclick="saveCurrentDrawings('btcd')">💾 Guardar dibujos</button>
+      </div>
+    </div>
+
+    <!-- TOTAL -->
+    <div class="tv-card" style="height:460px;">
+      <div class="tv-card-header">
+        <div class="tv-card-title">
+          <span class="ticker-badge">TOTAL</span>
+          <span class="ticker-desc">· Capitalización Total del Mercado</span>
+        </div>
+        <span class="tv-tag gold">Market Cap Global</span>
+      </div>
+      <div class="tv-widget-wrap" style="height:410px; flex:1;">
+        <div class="tradingview-widget-container" style="height:410px;width:100%;position:relative;">
+          <div id="tv-total" style="height:410px;width:100%;"></div>
+        </div>
+        <button class="save-drawings-btn" onclick="saveCurrentDrawings('total')">💾 Guardar dibujos</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- SECCIÓN: TOTAL2 + TOTAL3 + OTHERS -->
+<div class="section">
+  <div class="section-title">
+    <h2>Altcoins · TOTAL2, TOTAL3 &amp; OTHERS</h2>
+    <div class="section-line"></div>
+  </div>
+  <div class="chart-grid-secondary">
+
+    <!-- TOTAL2 -->
+    <div class="tv-card" style="height:420px;">
+      <div class="tv-card-header">
+        <div class="tv-card-title">
+          <span class="ticker-badge">TOTAL2</span>
+          <span class="ticker-desc">· ex-Bitcoin</span>
+        </div>
+        <span class="tv-tag green">Alts + ETH</span>
+      </div>
+      <div class="tv-widget-wrap" style="height:370px; flex:1;">
+        <div class="tradingview-widget-container" style="height:370px;width:100%;position:relative;">
+          <div id="tv-total2" style="height:370px;width:100%;"></div>
+        </div>
+        <button class="save-drawings-btn" onclick="saveCurrentDrawings('total2')">💾 Guardar</button>
+      </div>
+    </div>
+
+    <!-- TOTAL3 -->
+    <div class="tv-card" style="height:420px;">
+      <div class="tv-card-header">
+        <div class="tv-card-title">
+          <span class="ticker-badge">TOTAL3</span>
+          <span class="ticker-desc">· ex-BTC &amp; ex-ETH</span>
+        </div>
+        <span class="tv-tag purple">Altcoins Puras</span>
+      </div>
+      <div class="tv-widget-wrap" style="height:370px; flex:1;">
+        <div class="tradingview-widget-container" style="height:370px;width:100%;position:relative;">
+          <div id="tv-total3" style="height:370px;width:100%;"></div>
+        </div>
+        <button class="save-drawings-btn" onclick="saveCurrentDrawings('total3')">💾 Guardar</button>
+      </div>
+    </div>
+
+    <!-- OTHERS -->
+    <div class="tv-card" style="height:420px;">
+      <div class="tv-card-header">
+        <div class="tv-card-title">
+          <span class="ticker-badge">OTHERS</span>
+          <span class="ticker-desc">· ex-Top 10</span>
+        </div>
+        <span class="tv-tag" style="color:var(--red); border-color:rgba(255,77,109,0.3); background:rgba(255,77,109,0.08);">Small Caps</span>
+      </div>
+      <div class="tv-widget-wrap" style="height:370px; flex:1;">
+        <div class="tradingview-widget-container" style="height:370px;width:100%;position:relative;">
+          <div id="tv-others" style="height:370px;width:100%;"></div>
+        </div>
+        <button class="save-drawings-btn" onclick="saveCurrentDrawings('others')">💾 Guardar</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- SECCIÓN: HYPE + HYPE/BTC -->
+<div class="section">
+  <div class="section-title">
+    <h2>HYPE · Hyperliquid</h2>
+    <div class="section-line"></div>
+  </div>
+  <div class="chart-grid-hype">
+
+    <!-- HYPE/USDT -->
+    <div class="tv-card" style="height:460px;">
+      <div class="tv-card-header">
+        <div class="tv-card-title">
+          <span class="ticker-badge">HYPE/USDT</span>
+          <span class="ticker-desc">· KuCoin · Hyperliquid</span>
+        </div>
+        <span class="tv-tag cyan">HYPE</span>
+      </div>
+      <div class="tv-widget-wrap" style="height:410px; flex:1;">
+        <div class="tradingview-widget-container" style="height:410px;width:100%;position:relative;">
+          <div id="tv-hype" style="height:410px;width:100%;"></div>
+        </div>
+        <button class="save-drawings-btn" onclick="saveCurrentDrawings('hype')">💾 Guardar dibujos</button>
+      </div>
+    </div>
+
+    <!-- HYPE/BTC -->
+    <div class="tv-card" style="height:460px;">
+      <div class="tv-card-header">
+        <div class="tv-card-title">
+          <span class="ticker-badge">HYPE/BTC</span>
+          <span class="ticker-desc">· KuCoin ÷ Binance · Ratio relativo</span>
+        </div>
+        <span class="tv-tag gold">HYPE vs BTC</span>
+      </div>
+      <div class="tv-widget-wrap" style="height:410px; flex:1;">
+        <div class="tradingview-widget-container" style="height:410px;width:100%;position:relative;">
+          <div id="tv-hypebtc" style="height:410px;width:100%;"></div>
+        </div>
+        <button class="save-drawings-btn" onclick="saveCurrentDrawings('hypebtc')">💾 Guardar dibujos</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer class="footer">
+  <div class="footer-note">
+    Dashboard de análisis cripto. Datos en tiempo real vía TradingView. Las velas y dibujos se almacenan en Firebase Realtime Database.
+  </div>
+  <div class="footer-dev">
+    Desarrollado por <span>Juan Campos</span>
+  </div>
+</footer>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+<script>
+  window._tvWidgets = window._tvWidgets || {};
+
+  function showToast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(function() { t.classList.remove('show'); }, 3000);
+  }
+
+  function saveCurrentDrawings(widgetId) {
+    window.saveDrawings(widgetId, '{"saved": true, "ts": "' + new Date().toISOString() + '"}');
+  }
+
+  // Shared TV config base
+  function makeTVConfig(symbol, containerId, height, extraStudies, upColor) {
+    return {
+      "autosize": false,
+      "width": "100%",
+      "height": height,
+      "symbol": symbol,
+      "interval": "W",
+      "timezone": "Europe/Madrid",
+      "theme": "dark",
+      "style": "1",
+      "locale": "es",
+      "toolbar_bg": "#0a1628",
+      "enable_publishing": false,
+      "hide_top_toolbar": false,
+      "hide_side_toolbar": false,
+      "hide_legend": false,
+      "save_image": true,
+      "allow_symbol_change": true,
+      "withdateranges": true,
+      "show_popup_button": true,
+      "popup_width": "1400",
+      "popup_height": "900",
+      "container_id": containerId,
+      "studies": extraStudies || [],
+      "drawings_access": { "type": "all" },
+      "backgroundColor": "#050c1a",
+      "gridColor": "rgba(56,139,253,0.06)",
+      "overrides": {
+        "mainSeriesProperties.candleStyle.upColor": upColor || "#00e5a0",
+        "mainSeriesProperties.candleStyle.downColor": "#ff4d6d",
+        "mainSeriesProperties.candleStyle.borderUpColor": upColor || "#00e5a0",
+        "mainSeriesProperties.candleStyle.borderDownColor": "#ff4d6d",
+        "mainSeriesProperties.candleStyle.wickUpColor": upColor || "#00e5a0",
+        "mainSeriesProperties.candleStyle.wickDownColor": "#ff4d6d",
+        "paneProperties.background": "#050c1a",
+        "paneProperties.backgroundType": "solid",
+        "paneProperties.vertGridProperties.color": "rgba(56,139,253,0.05)",
+        "paneProperties.horzGridProperties.color": "rgba(56,139,253,0.05)"
+      }
+    };
+  }
+
+  function initWidgets() {
+    try {
+      // BTC/USDT principal con indicadores
+      window._tvWidgets['btcusdt'] = new TradingView.widget(makeTVConfig(
+        "BINANCE:BTCUSDT", "tv-btcusdt", 620,
+        [
+          { "id": "MASimple@tv-basicstudies", "inputs": { "length": 147 } },
+          { "id": "MAExp@tv-basicstudies",    "inputs": { "length": 140 } },
+          { "id": "MACD@tv-basicstudies" },
+          { "id": "RSI@tv-basicstudies" }
+        ],
+        "#00e5a0"
+      ));
+
+      // BTC Dominance
+      window._tvWidgets['btcd'] = new TradingView.widget(makeTVConfig(
+        "CRYPTOCAP:BTC.D", "tv-btcd", 410, [], "#00d4ff"
+      ));
+
+      // TOTAL
+      window._tvWidgets['total'] = new TradingView.widget(makeTVConfig(
+        "CRYPTOCAP:TOTAL", "tv-total", 410, [], "#f0c040"
+      ));
+
+      // TOTAL2
+      window._tvWidgets['total2'] = new TradingView.widget(makeTVConfig(
+        "CRYPTOCAP:TOTAL2", "tv-total2", 370, [], "#00e5a0"
+      ));
+
+      // TOTAL3
+      window._tvWidgets['total3'] = new TradingView.widget(makeTVConfig(
+        "CRYPTOCAP:TOTAL3", "tv-total3", 370, [], "#a78bfa"
+      ));
+
+      // OTHERS
+      window._tvWidgets['others'] = new TradingView.widget(makeTVConfig(
+        "CRYPTOCAP:OTHERS", "tv-others", 370, [], "#ff6b6b"
+      ));
+
+      // HYPE/USDT
+      window._tvWidgets['hype'] = new TradingView.widget(makeTVConfig(
+        "KUCOIN:HYPEUSDT", "tv-hype", 410, [], "#00d4ff"
+      ));
+
+      // HYPE/BTC ratio
+      window._tvWidgets['hypebtc'] = new TradingView.widget(makeTVConfig(
+        "KUCOIN:HYPEUSDT/BINANCE:BTCUSDT", "tv-hypebtc", 410, [], "#f0c040"
+      ));
+
+    } catch(e) {
+      console.warn("TV init error:", e);
+    }
+  }
+
+  // Esperar a que tv.js esté disponible
+  if (typeof TradingView !== 'undefined') {
+    initWidgets();
+  } else {
+    document.querySelector('script[src*="tv.js"]').addEventListener('load', initWidgets);
+  }
+
+  // Reloj en header
+  function updateClock() {
+    var now = new Date();
+    var opts = { weekday:'short', day:'2-digit', month:'short', year:'numeric',
+                 hour:'2-digit', minute:'2-digit', timeZone:'Europe/Madrid' };
+    var el = document.getElementById('session-count');
+    if (el && !el.textContent) {
+      el.textContent = now.toLocaleDateString('es-ES', opts);
+    }
+  }
+  updateClock();
+  setInterval(updateClock, 60000);
+</script>
+
+</body>
+</html>
