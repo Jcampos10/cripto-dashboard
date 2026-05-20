@@ -6,13 +6,12 @@
 <title>Crypto Dashboard — Análisis Global de Mercado</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
-<!-- Firebase SDK -->
 <script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getDatabase, ref, set, get, onValue, push } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+  import { initializeApp }   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
   import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
-  // ─── CONFIGURA TU FIREBASE AQUÍ ───────────────────────────────────────────
+  /* ▼▼▼  PEGA AQUÍ TU CONFIGURACIÓN DE FIREBASE  ▼▼▼ */
   const firebaseConfig = {
     apiKey: "AIzaSyDdUBB4yMHhUL_TMuc0qx_WweHON3TCK8I",
     authDomain: "dashboard-cripto-53ea6.firebaseapp.com",
@@ -22,893 +21,562 @@
     messagingSenderId: "310927364843",
     appId: "1:310927364843:web:291c2c24212acc323da4ae"
   };
-  // ──────────────────────────────────────────────────────────────────────────
+  /* ▲▲▲  FIN DE CONFIGURACIÓN  ▲▲▲ */
 
-  let db, auth, currentUserId;
-  let drawingsData = {};
+  let db, currentUserId;
+  window._DB_layouts = {};
 
   try {
-    const app = initializeApp(firebaseConfig);
-    db = getDatabase(app);
-    auth = getAuth(app);
+    const app  = initializeApp(firebaseConfig);
+    db         = getDatabase(app);
+    const auth = getAuth(app);
+    signInAnonymously(auth).catch(e => console.warn("Auth:", e.message));
 
-    signInAnonymously(auth).catch((e) => {
-      console.warn("Firebase auth error:", e.message);
-      window._firebaseReady = false;
-    });
+    onAuthStateChanged(auth, user => {
+      if (!user) return;
+      currentUserId   = user.uid;
+      window._fbReady = true;
 
-    onAuthStateChanged(auth, (user) => {
-      if (user) {
-        currentUserId = user.uid;
-        window._firebaseReady = true;
-
-        // Registrar sesión
-        const sessionRef = ref(db, 'sessions/' + Date.now());
-        set(sessionRef, {
-          userId: currentUserId,
-          timestamp: new Date().toISOString(),
-          userAgent: navigator.userAgent.substring(0, 100)
-        });
-
-        // Cargar sesiones
-        const sessionsRef = ref(db, 'sessions');
-        onValue(sessionsRef, (snapshot) => {
-          const data = snapshot.val();
-          if (data) {
-            const count = Object.keys(data).length;
-            const el = document.getElementById('session-count');
-            if (el) el.textContent = count + ' sesiones registradas';
-          }
-        });
-
-        // Cargar y sincronizar dibujos de TradingView
-        const drawingsRef = ref(db, 'tv_drawings');
-        onValue(drawingsRef, (snapshot) => {
-          const data = snapshot.val();
-          if (data) {
-            drawingsData = data;
-            updateDrawingsUI(data);
-          }
-        });
-
-        console.log("✅ Firebase conectado. Usuario:", currentUserId);
-      }
-    });
-
-    window.saveDrawings = function(widgetId, drawingJson) {
-      if (!db || !currentUserId) return;
-      const drawRef = ref(db, 'tv_drawings/' + widgetId);
-      set(drawRef, {
-        data: drawingJson,
-        savedBy: currentUserId,
-        timestamp: new Date().toISOString()
-      }).then(() => {
-        showToast('Dibujos guardados en la nube ✓');
+      set(ref(db, 'sessions/' + Date.now()), {
+        uid: currentUserId, ts: new Date().toISOString()
       });
-    };
 
-    window.loadDrawings = function(widgetId) {
-      return drawingsData[widgetId] ? drawingsData[widgetId].data : null;
-    };
+      onValue(ref(db, 'sessions'), snap => {
+        const d = snap.val();
+        const el = document.getElementById('session-count');
+        if (el && d) el.textContent = Object.keys(d).length + ' sesiones registradas';
+      });
 
+      onValue(ref(db, 'tv_layouts'), snap => {
+        const d = snap.val();
+        if (!d) return;
+        window._DB_layouts = d;
+        const dates = Object.values(d).map(v => v.savedAt).filter(Boolean).sort();
+        const last  = dates[dates.length - 1];
+        const el    = document.getElementById('last-saved');
+        if (el && last) el.textContent = 'Últ. guardado: ' + new Date(last).toLocaleString('es-ES');
+        Object.keys(d).forEach(wid => {
+          const l = d[wid];
+          if (l && l.savedAt) _updateCardInfo(wid, l);
+        });
+      });
+      console.log('✅ Firebase OK. UID:', currentUserId);
+    });
   } catch(e) {
-    console.warn("Firebase no configurado:", e.message);
-    window._firebaseReady = false;
-    window.saveDrawings = () => {};
-    window.loadDrawings = () => null;
+    console.warn('Firebase no configurado:', e.message);
+    window._fbReady = false;
   }
 
-  function updateDrawingsUI(data) {
-    const lastSaved = Object.values(data)
-      .filter(d => d.timestamp)
-      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0];
-    if (lastSaved) {
-      const el = document.getElementById('last-saved');
-      if (el) el.textContent = 'Último guardado: ' + new Date(lastSaved.timestamp).toLocaleString('es-ES');
-    }
-  }
+  window.FB_save = async function(widgetId, payload) {
+    if (!db) return false;
+    try {
+      await set(ref(db, 'tv_layouts/' + widgetId), {
+        ...payload, savedBy: currentUserId, savedAt: new Date().toISOString()
+      });
+      return true;
+    } catch(e) { console.error(e); return false; }
+  };
+
+  window.FB_get = function(widgetId) {
+    return window._DB_layouts[widgetId] || null;
+  };
 </script>
 
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-void:#050c1a;--bg-card:#0f1f35;--bg-elevated:#162a42;
+  --border-subtle:rgba(56,139,253,.12);--border-mid:rgba(56,139,253,.22);--border-accent:rgba(56,139,253,.45);
+  --cyan:#00d4ff;--cyan-dim:rgba(0,212,255,.1);
+  --gold:#f0c040;--gold-dim:rgba(240,192,64,.1);
+  --green:#00e5a0;--green-dim:rgba(0,229,160,.1);
+  --red:#ff4d6d;--purple:#a78bfa;
+  --text-primary:#e8f0fe;--text-secondary:#8ba4c8;--text-muted:#4a6080;
+  --font-d:'DM Serif Display',Georgia,serif;--font-b:'DM Sans',system-ui,sans-serif;
+  --r-sm:6px;--r-md:10px;--r-lg:16px;
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg-void);color:var(--text-primary);font-family:var(--font-b);font-size:14px;line-height:1.6;min-height:100vh;overflow-x:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(56,139,253,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(56,139,253,.03) 1px,transparent 1px);background-size:48px 48px;pointer-events:none;z-index:0}
 
-  :root {
-    --bg-void: #050c1a;
-    --bg-surface: #0a1628;
-    --bg-card: #0f1f35;
-    --bg-card-hover: #132540;
-    --bg-elevated: #162a42;
-    --border-subtle: rgba(56, 139, 253, 0.12);
-    --border-mid: rgba(56, 139, 253, 0.22);
-    --border-accent: rgba(56, 139, 253, 0.45);
-    --cyan: #00d4ff;
-    --cyan-dim: rgba(0, 212, 255, 0.15);
-    --gold: #f0c040;
-    --gold-dim: rgba(240, 192, 64, 0.15);
-    --green: #00e5a0;
-    --green-dim: rgba(0, 229, 160, 0.12);
-    --red: #ff4d6d;
-    --purple: #a78bfa;
-    --text-primary: #e8f0fe;
-    --text-secondary: #8ba4c8;
-    --text-muted: #4a6080;
-    --font-display: 'DM Serif Display', Georgia, serif;
-    --font-body: 'DM Sans', system-ui, sans-serif;
-    --radius-sm: 6px;
-    --radius-md: 10px;
-    --radius-lg: 16px;
-    --radius-xl: 22px;
-    --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.4);
-    --shadow-glow: 0 0 30px rgba(0, 212, 255, 0.06);
-  }
+/* HEADER */
+.header{position:relative;z-index:10;padding:22px 28px 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;animation:fadeUp .5s ease both}
+.hbrand{display:flex;align-items:center;gap:14px}
+.logo{width:42px;height:42px;background:linear-gradient(135deg,var(--cyan),#0080ff);border-radius:var(--r-md);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#000;box-shadow:0 0 20px rgba(0,212,255,.3)}
+.htitle h1{font-family:var(--font-d);font-size:21px;letter-spacing:-.3px;line-height:1.2}
+.htitle p{font-size:11px;color:var(--text-muted);letter-spacing:.08em;text-transform:uppercase;font-weight:500}
+.hmeta{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.spill{display:flex;align-items:center;gap:6px;background:var(--bg-card);border:1px solid var(--border-subtle);padding:6px 12px;border-radius:100px;font-size:12px;color:var(--text-secondary)}
+.sdot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pdot 2s ease-in-out infinite}
+@keyframes pdot{0%,100%{opacity:1}50%{opacity:.3}}
+#last-saved,#session-count{font-size:11px;color:var(--text-muted)}
 
-  html { scroll-behavior: smooth; }
+/* NOTICE BANNER */
+.notice{position:relative;z-index:10;margin:16px 28px 0;padding:12px 16px;background:rgba(240,192,64,.07);border:1px solid rgba(240,192,64,.25);border-radius:var(--r-md);display:flex;gap:12px;align-items:flex-start}
+.notice-icon{font-size:18px;flex-shrink:0;line-height:1.4}
+.notice-body{flex:1}
+.notice-body strong{color:var(--gold);font-size:13px}
+.notice-body p{font-size:12px;color:var(--text-secondary);margin-top:3px;line-height:1.5}
+.notice-close{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;padding:0 4px;line-height:1;flex-shrink:0}
 
-  body {
-    background: var(--bg-void);
-    color: var(--text-primary);
-    font-family: var(--font-body);
-    font-size: 14px;
-    line-height: 1.6;
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
+/* METRICS */
+.metrics{position:relative;z-index:10;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;padding:18px 28px;animation:fadeUp .55s ease both}
+.mc{background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--r-lg);padding:15px 17px;transition:border-color .2s,transform .2s;cursor:default}
+.mc:hover{border-color:var(--border-accent);transform:translateY(-2px)}
+.ml{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);margin-bottom:5px}
+.mv{font-family:var(--font-d);font-size:23px;line-height:1;margin-bottom:4px}
+.mv.c{color:var(--cyan)}.mv.g{color:var(--gold)}.mv.gr{color:var(--green)}.mv.p{color:var(--purple)}.mv.r{color:var(--red)}
+.mb{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;padding:2px 7px;border-radius:100px;background:rgba(0,229,160,.1);color:var(--green)}
 
-  /* Background grid pattern */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(56,139,253,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(56,139,253,0.03) 1px, transparent 1px);
-    background-size: 48px 48px;
-    pointer-events: none;
-    z-index: 0;
-  }
+/* SECTIONS */
+.section{position:relative;z-index:10;padding:0 28px 18px}
+.stitle{display:flex;align-items:center;gap:10px;margin-bottom:13px}
+.stitle h2{font-family:var(--font-d);font-size:15px;color:var(--text-secondary);font-weight:400;font-style:italic;white-space:nowrap}
+.sline{flex:1;height:1px;background:var(--border-subtle)}
 
-  /* ── HEADER ─────────────────────────────────────────── */
-  .header {
-    position: relative;
-    z-index: 10;
-    padding: 24px 28px 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
-  }
+/* GRIDS */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
+@media(max-width:900px){.g2,.g3{grid-template-columns:1fr}}
 
-  .header-brand {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-  }
+/* TV CARD */
+.tvc{background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--r-lg);overflow:hidden;display:flex;flex-direction:column;transition:border-color .2s,box-shadow .2s;box-shadow:0 4px 24px rgba(0,0,0,.4);animation:fadeUp .5s ease both}
+.tvc:hover{border-color:var(--border-mid);box-shadow:0 0 28px rgba(0,212,255,.07)}
+.tvch{display:flex;align-items:center;justify-content:space-between;padding:11px 14px 10px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;gap:8px}
+.tvct{display:flex;align-items:center;gap:8px;min-width:0}
+.tick{font-size:13px;font-weight:700;letter-spacing:.04em;color:var(--text-primary);white-space:nowrap}
+.tdesc{font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:100px;border:1px solid;white-space:nowrap;flex-shrink:0}
+.tag.c{color:var(--cyan);border-color:rgba(0,212,255,.3);background:var(--cyan-dim)}
+.tag.g{color:var(--gold);border-color:rgba(240,192,64,.3);background:var(--gold-dim)}
+.tag.gr{color:var(--green);border-color:rgba(0,229,160,.3);background:var(--green-dim)}
+.tag.p{color:var(--purple);border-color:rgba(167,139,250,.3);background:rgba(167,139,250,.1)}
+.tag.r{color:var(--red);border-color:rgba(255,77,109,.3);background:rgba(255,77,109,.08)}
 
-  .logo-mark {
-    width: 42px; height: 42px;
-    background: linear-gradient(135deg, var(--cyan), #0080ff);
-    border-radius: var(--radius-md);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px; font-weight: 700; color: #000;
-    flex-shrink: 0;
-    box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
-  }
+/* NOTAS PANEL (debajo del gráfico, visible en la card) */
+.notes-panel{border-top:1px solid var(--border-subtle);background:var(--bg-elevated);flex-shrink:0}
+.notes-header{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;cursor:pointer;user-select:none}
+.notes-header-left{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--text-muted)}
+.notes-dot{width:6px;height:6px;border-radius:50%;background:var(--text-muted);flex-shrink:0}
+.notes-dot.has-data{background:var(--green);box-shadow:0 0 6px var(--green)}
+.notes-date{font-size:10px;color:var(--text-muted);font-style:italic}
+.notes-actions{display:flex;gap:6px}
+.nbtn{display:flex;align-items:center;gap:4px;border:1px solid var(--border-mid);font-family:var(--font-b);font-size:11px;font-weight:600;padding:4px 10px;border-radius:var(--r-sm);cursor:pointer;transition:background .2s;white-space:nowrap;background:var(--bg-card)}
+.nbtn.save{color:var(--green)}.nbtn.save:hover{background:var(--green-dim);border-color:rgba(0,229,160,.4)}
+.nbtn.clear{color:var(--red)}.nbtn.clear:hover{background:rgba(255,77,109,.08);border-color:rgba(255,77,109,.3)}
+.notes-body{padding:0 14px 10px;display:none}
+.notes-body.open{display:block}
+.notes-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.nfield label{display:block;font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px}
+.nfield input,.nfield select,.notes-textarea{
+  width:100%;background:var(--bg-void);border:1px solid var(--border-mid);border-radius:var(--r-sm);
+  color:var(--text-primary);font-family:var(--font-b);font-size:12px;padding:6px 9px;outline:none;
+}
+.nfield input:focus,.nfield select:focus,.notes-textarea:focus{border-color:var(--border-accent)}
+.nfield select option{background:var(--bg-card)}
+.notes-textarea{width:100%;height:72px;resize:vertical;line-height:1.5;margin-bottom:4px}
+.notes-preview{padding:8px 14px 10px;font-size:12px;color:var(--text-secondary);line-height:1.5;display:none;white-space:pre-wrap;word-break:break-word;border-top:1px dashed var(--border-subtle);background:rgba(0,0,0,.15)}
+.notes-preview.open{display:block}
 
-  .header-title h1 {
-    font-family: var(--font-display);
-    font-size: 22px;
-    color: var(--text-primary);
-    letter-spacing: -0.3px;
-    line-height: 1.2;
-  }
+/* BIAS BADGE */
+.bias-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;padding:2px 8px;border-radius:100px;letter-spacing:.06em;text-transform:uppercase}
+.bias-bull{background:rgba(0,229,160,.12);color:var(--green);border:1px solid rgba(0,229,160,.3)}
+.bias-bear{background:rgba(255,77,109,.12);color:var(--red);border:1px solid rgba(255,77,109,.3)}
+.bias-neutral{background:rgba(240,192,64,.1);color:var(--gold);border:1px solid rgba(240,192,64,.25)}
+.bias-wait{background:rgba(167,139,250,.1);color:var(--purple);border:1px solid rgba(167,139,250,.25)}
 
-  .header-title p {
-    font-size: 12px;
-    color: var(--text-muted);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    font-weight: 500;
-  }
+/* TOAST */
+#toast{position:fixed;bottom:20px;right:24px;z-index:9999;background:var(--bg-elevated);border:1px solid var(--border-accent);color:var(--text-primary);font-family:var(--font-b);font-size:13px;font-weight:500;padding:10px 18px;border-radius:var(--r-md);pointer-events:none;opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;box-shadow:0 4px 20px rgba(0,0,0,.55);max-width:340px}
+#toast.show{opacity:1;transform:translateY(0)}
+#toast.ok{border-color:rgba(0,229,160,.5);color:var(--green)}
+#toast.err{border-color:rgba(255,77,109,.5);color:var(--red)}
 
-  .header-meta {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
+/* FOOTER */
+.footer{position:relative;z-index:10;border-top:1px solid var(--border-subtle);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-top:6px}
+.footer-note{font-size:11px;color:var(--text-muted);font-style:italic}
+.footer-dev{font-family:var(--font-d);font-size:14px;color:var(--text-secondary)}
+.footer-dev span{color:var(--cyan);font-style:italic}
 
-  .status-pill {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-subtle);
-    padding: 6px 12px;
-    border-radius: 100px;
-    font-size: 12px;
-    color: var(--text-secondary);
-  }
-
-  .status-dot {
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    background: var(--green);
-    box-shadow: 0 0 8px var(--green);
-    animation: pulse-dot 2s ease-in-out infinite;
-  }
-
-  @keyframes pulse-dot {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-  }
-
-  #last-saved, #session-count {
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-
-  /* ── STRIP DE MÉTRICAS ──────────────────────────────── */
-  .metrics-strip {
-    position: relative;
-    z-index: 10;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 12px;
-    padding: 20px 28px;
-    animation: fadeUp 0.6s ease both;
-  }
-
-  .metric-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    padding: 16px 18px;
-    transition: border-color 0.2s, transform 0.2s;
-    cursor: default;
-  }
-
-  .metric-card:hover {
-    border-color: var(--border-accent);
-    transform: translateY(-2px);
-  }
-
-  .metric-label {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    margin-bottom: 6px;
-  }
-
-  .metric-value {
-    font-family: var(--font-display);
-    font-size: 26px;
-    color: var(--text-primary);
-    line-height: 1;
-    margin-bottom: 4px;
-  }
-
-  .metric-value.cyan { color: var(--cyan); }
-  .metric-value.gold { color: var(--gold); }
-  .metric-value.green { color: var(--green); }
-  .metric-value.purple { color: var(--purple); }
-
-  .metric-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 7px;
-    border-radius: 100px;
-  }
-
-  .metric-badge.up { background: rgba(0,229,160,0.12); color: var(--green); }
-  .metric-badge.down { background: rgba(255,77,109,0.12); color: var(--red); }
-
-  /* ── SECCIÓN DE CHARTS ──────────────────────────────── */
-  .section {
-    position: relative;
-    z-index: 10;
-    padding: 0 28px 20px;
-  }
-
-  .section-title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
-  }
-
-  .section-title h2 {
-    font-family: var(--font-display);
-    font-size: 16px;
-    color: var(--text-secondary);
-    font-weight: 400;
-    font-style: italic;
-  }
-
-  .section-line {
-    flex: 1;
-    height: 1px;
-    background: var(--border-subtle);
-  }
-
-  /* ── TV WIDGET CARDS ────────────────────────────────── */
-  .chart-grid-main {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-    margin-bottom: 14px;
-  }
-
-  .chart-grid-secondary {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
-    margin-bottom: 14px;
-  }
-
-  .chart-grid-hype {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-    margin-bottom: 14px;
-  }
-
-  @media (max-width: 900px) {
-    .chart-grid-main,
-    .chart-grid-secondary,
-    .chart-grid-hype { grid-template-columns: 1fr; }
-  }
-
-  .tv-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    transition: border-color 0.2s, box-shadow 0.2s;
-    box-shadow: var(--shadow-card);
-    animation: fadeUp 0.5s ease both;
-  }
-
-  .tv-card:hover {
-    border-color: var(--border-mid);
-    box-shadow: var(--shadow-glow);
-  }
-
-  .tv-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 16px 10px;
-    border-bottom: 1px solid var(--border-subtle);
-    flex-shrink: 0;
-  }
-
-  .tv-card-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .ticker-badge {
-    font-size: 13px;
-    font-weight: 700;
-    font-family: var(--font-body);
-    letter-spacing: 0.04em;
-    color: var(--text-primary);
-  }
-
-  .ticker-desc {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-weight: 400;
-  }
-
-  .tv-tag {
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    padding: 3px 8px;
-    border-radius: 100px;
-    border: 1px solid;
-  }
-
-  .tv-tag.cyan { color: var(--cyan); border-color: rgba(0,212,255,0.3); background: var(--cyan-dim); }
-  .tv-tag.gold { color: var(--gold); border-color: rgba(240,192,64,0.3); background: var(--gold-dim); }
-  .tv-tag.green { color: var(--green); border-color: rgba(0,229,160,0.3); background: var(--green-dim); }
-  .tv-tag.purple { color: var(--purple); border-color: rgba(167,139,250,0.3); background: rgba(167,139,250,0.1); }
-
-  .tv-widget-wrap {
-    flex: 1;
-    position: relative;
-  }
-
-  .save-drawings-btn {
-    position: absolute;
-    bottom: 10px;
-    right: 10px;
-    z-index: 20;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-mid);
-    color: var(--cyan);
-    font-family: var(--font-body);
-    font-size: 11px;
-    font-weight: 600;
-    padding: 5px 10px;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    transition: background 0.2s, border-color 0.2s;
-    letter-spacing: 0.04em;
-  }
-
-  .save-drawings-btn:hover {
-    background: var(--cyan-dim);
-    border-color: var(--border-accent);
-  }
-
-  /* ── TOAST ──────────────────────────────────────────── */
-  #toast {
-    position: fixed;
-    bottom: 80px;
-    right: 24px;
-    z-index: 9999;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-accent);
-    color: var(--cyan);
-    font-family: var(--font-body);
-    font-size: 13px;
-    font-weight: 500;
-    padding: 10px 18px;
-    border-radius: var(--radius-md);
-    pointer-events: none;
-    opacity: 0;
-    transform: translateY(10px);
-    transition: opacity 0.3s, transform 0.3s;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-  }
-
-  #toast.show {
-    opacity: 1;
-    transform: translateY(0);
-  }
-
-  /* ── FOOTER ─────────────────────────────────────────── */
-  .footer {
-    position: relative;
-    z-index: 10;
-    border-top: 1px solid var(--border-subtle);
-    padding: 18px 28px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 8px;
-  }
-
-  .footer-note {
-    font-size: 12px;
-    color: var(--text-muted);
-    font-style: italic;
-  }
-
-  .footer-dev {
-    font-family: var(--font-display);
-    font-size: 14px;
-    color: var(--text-secondary);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .footer-dev span {
-    color: var(--cyan);
-    font-style: italic;
-  }
-
-  /* ── ANIMATIONS ─────────────────────────────────────── */
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(18px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-
-  .tv-card:nth-child(1) { animation-delay: 0.05s; }
-  .tv-card:nth-child(2) { animation-delay: 0.10s; }
-  .tv-card:nth-child(3) { animation-delay: 0.15s; }
-  .tv-card:nth-child(4) { animation-delay: 0.20s; }
-  .tv-card:nth-child(5) { animation-delay: 0.25s; }
-  .tv-card:nth-child(6) { animation-delay: 0.30s; }
-
-  /* ── SCROLLBAR ──────────────────────────────────────── */
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: var(--bg-void); }
-  ::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 3px; }
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+.tvc:nth-child(1){animation-delay:.04s}.tvc:nth-child(2){animation-delay:.09s}.tvc:nth-child(3){animation-delay:.14s}
+::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:var(--bg-void)}::-webkit-scrollbar-thumb{background:var(--border-mid);border-radius:3px}
 </style>
 </head>
 <body>
 
 <!-- HEADER -->
 <header class="header">
-  <div class="header-brand">
-    <div class="logo-mark">₿</div>
-    <div class="header-title">
+  <div class="hbrand">
+    <div class="logo">₿</div>
+    <div class="htitle">
       <h1>Dashboard de Mercado Cripto</h1>
-      <p>Análisis Global · Temporalidad 1W</p>
+      <p>Análisis Global · Temporalidad 1W · Firebase Sync</p>
     </div>
   </div>
-  <div class="header-meta">
-    <div class="status-pill">
-      <div class="status-dot"></div>
-      <span>Mercado en vivo</span>
-    </div>
-    <div id="session-count" style="font-size:11px; color: var(--text-muted);"></div>
-    <div id="last-saved" style="font-size:11px; color: var(--text-muted);"></div>
+  <div class="hmeta">
+    <div class="spill"><div class="sdot"></div><span>Mercado en vivo</span></div>
+    <div id="session-count"></div>
+    <div id="last-saved"></div>
   </div>
 </header>
 
-<!-- METRICS STRIP -->
-<div class="metrics-strip">
-  <div class="metric-card">
-    <div class="metric-label">BTC Dominance</div>
-    <div class="metric-value cyan" id="m-btcd">—</div>
-    <div class="metric-badge up" id="m-btcd-b">▲ cargando</div>
+<!-- NOTICE -->
+<div class="notice" id="tv-notice">
+  <div class="notice-icon">💡</div>
+  <div class="notice-body">
+    <strong>Cómo guardar los dibujos de TradingView entre sesiones</strong>
+    <p>Los dibujos (líneas, fibonacci, canales…) los gestiona TradingView en su propia nube. Para que persistan: <strong style="color:var(--gold)">inicia sesión en TradingView.com</strong> en este mismo navegador. El widget los detectará y restaurará automáticamente en cualquier dispositivo. Las <strong style="color:var(--cyan)">notas de análisis</strong> de cada gráfico sí se guardan aquí en Firebase y son visibles para todos.</p>
   </div>
-  <div class="metric-card">
-    <div class="metric-label">Total Market Cap</div>
-    <div class="metric-value gold" id="m-total">—</div>
-    <div class="metric-badge up" id="m-total-b">▲ cargando</div>
-  </div>
-  <div class="metric-card">
-    <div class="metric-label">TOTAL2 (ex-BTC)</div>
-    <div class="metric-value green" id="m-total2">—</div>
-    <div class="metric-badge up" id="m-total2-b">▲ cargando</div>
-  </div>
-  <div class="metric-card">
-    <div class="metric-label">TOTAL3 (Alts)</div>
-    <div class="metric-value purple" id="m-total3">—</div>
-    <div class="metric-badge up" id="m-total3-b">▲ cargando</div>
-  </div>
-  <div class="metric-card">
-    <div class="metric-label">OTHERS</div>
-    <div class="metric-value" style="color:var(--red);" id="m-others">—</div>
-    <div class="metric-badge up" id="m-others-b">▲ cargando</div>
+  <button class="notice-close" onclick="document.getElementById('tv-notice').style.display='none'">✕</button>
+</div>
+
+<!-- METRICS -->
+<div class="metrics">
+  <div class="mc"><div class="ml">BTC Dominance</div><div class="mv c">BTC.D</div><div class="mb">▲ ver gráfico</div></div>
+  <div class="mc"><div class="ml">Total Market Cap</div><div class="mv g">TOTAL</div><div class="mb">▲ ver gráfico</div></div>
+  <div class="mc"><div class="ml">TOTAL2 (ex-BTC)</div><div class="mv gr">TOTAL2</div><div class="mb">▲ ver gráfico</div></div>
+  <div class="mc"><div class="ml">TOTAL3 (Alts)</div><div class="mv p">TOTAL3</div><div class="mb">▲ ver gráfico</div></div>
+  <div class="mc"><div class="ml">OTHERS</div><div class="mv r">OTHERS</div><div class="mb">▲ ver gráfico</div></div>
+</div>
+
+<!-- BTC/USDT -->
+<div class="section">
+  <div class="stitle"><h2>Bitcoin · BTC/USDT con Indicadores</h2><div class="sline"></div></div>
+  <div class="tvc">
+    <div class="tvch">
+      <div class="tvct"><span class="tick">BTCUSDT</span><span class="tdesc">· Binance · 1W · EMA 20w · SMA 21w · MACD · RSI</span></div>
+      <span class="tag c">BTC Principal</span>
+    </div>
+    <div style="flex:1"><div id="tv-btcusdt" style="height:620px;width:100%;"></div></div>
+    <div id="notes-btcusdt" class="notes-panel"></div>
   </div>
 </div>
 
-<!-- SECCIÓN PRINCIPAL: BTC/USDT (grande con indicadores) -->
+<!-- BTC.D + TOTAL -->
 <div class="section">
-  <div class="section-title">
-    <h2>Bitcoin · BTC/USDT con Indicadores</h2>
-    <div class="section-line"></div>
-  </div>
-
-  <div class="tv-card" style="height: 680px;">
-    <div class="tv-card-header">
-      <div class="tv-card-title">
-        <span class="ticker-badge">BTCUSDT</span>
-        <span class="ticker-desc">· Binance · 1W · EMA 20w · SMA 21w · MACD · RSI · MVRV</span>
+  <div class="stitle"><h2>Dominancia &amp; Capitalización Total</h2><div class="sline"></div></div>
+  <div class="g2">
+    <div class="tvc">
+      <div class="tvch">
+        <div class="tvct"><span class="tick">BTC.D</span><span class="tdesc">· Dominancia de Bitcoin</span></div>
+        <span class="tag c">Dominancia</span>
       </div>
-      <span class="tv-tag cyan">BTC Principal</span>
+      <div style="flex:1"><div id="tv-btcd" style="height:400px;width:100%;"></div></div>
+      <div id="notes-btcd" class="notes-panel"></div>
     </div>
-    <div class="tv-widget-wrap" style="height: 620px; flex: 1;">
-      <!-- TradingView Widget: BTC/USDT 1W con indicadores -->
-      <div class="tradingview-widget-container" id="container-btcusdt" style="height:620px;width:100%;position:relative;">
-        <div id="tv-btcusdt" style="height:620px;width:100%;"></div>
+    <div class="tvc">
+      <div class="tvch">
+        <div class="tvct"><span class="tick">TOTAL</span><span class="tdesc">· Capitalización Total</span></div>
+        <span class="tag g">Market Cap Global</span>
       </div>
-      <button class="save-drawings-btn" onclick="saveCurrentDrawings('btcusdt')">
-        💾 Guardar dibujos
-      </button>
+      <div style="flex:1"><div id="tv-total" style="height:400px;width:100%;"></div></div>
+      <div id="notes-total" class="notes-panel"></div>
     </div>
   </div>
 </div>
 
-<!-- SECCIÓN: BTC DOMINANCE + TOTAL -->
+<!-- TOTAL2 + TOTAL3 + OTHERS -->
 <div class="section">
-  <div class="section-title">
-    <h2>Dominancia &amp; Capitalización Total</h2>
-    <div class="section-line"></div>
-  </div>
-  <div class="chart-grid-main">
-
-    <!-- BTC.D -->
-    <div class="tv-card" style="height:460px;">
-      <div class="tv-card-header">
-        <div class="tv-card-title">
-          <span class="ticker-badge">BTC.D</span>
-          <span class="ticker-desc">· Dominancia de Bitcoin</span>
-        </div>
-        <span class="tv-tag cyan">Dominancia</span>
+  <div class="stitle"><h2>Altcoins · TOTAL2, TOTAL3 &amp; OTHERS</h2><div class="sline"></div></div>
+  <div class="g3">
+    <div class="tvc">
+      <div class="tvch">
+        <div class="tvct"><span class="tick">TOTAL2</span><span class="tdesc">· ex-Bitcoin</span></div>
+        <span class="tag gr">Alts + ETH</span>
       </div>
-      <div class="tv-widget-wrap" style="height:410px; flex:1;">
-        <div class="tradingview-widget-container" style="height:410px;width:100%;position:relative;">
-          <div id="tv-btcd" style="height:410px;width:100%;"></div>
-        </div>
-        <button class="save-drawings-btn" onclick="saveCurrentDrawings('btcd')">💾 Guardar dibujos</button>
-      </div>
+      <div style="flex:1"><div id="tv-total2" style="height:360px;width:100%;"></div></div>
+      <div id="notes-total2" class="notes-panel"></div>
     </div>
-
-    <!-- TOTAL -->
-    <div class="tv-card" style="height:460px;">
-      <div class="tv-card-header">
-        <div class="tv-card-title">
-          <span class="ticker-badge">TOTAL</span>
-          <span class="ticker-desc">· Capitalización Total del Mercado</span>
-        </div>
-        <span class="tv-tag gold">Market Cap Global</span>
+    <div class="tvc">
+      <div class="tvch">
+        <div class="tvct"><span class="tick">TOTAL3</span><span class="tdesc">· ex-BTC &amp; ex-ETH</span></div>
+        <span class="tag p">Altcoins Puras</span>
       </div>
-      <div class="tv-widget-wrap" style="height:410px; flex:1;">
-        <div class="tradingview-widget-container" style="height:410px;width:100%;position:relative;">
-          <div id="tv-total" style="height:410px;width:100%;"></div>
-        </div>
-        <button class="save-drawings-btn" onclick="saveCurrentDrawings('total')">💾 Guardar dibujos</button>
-      </div>
+      <div style="flex:1"><div id="tv-total3" style="height:360px;width:100%;"></div></div>
+      <div id="notes-total3" class="notes-panel"></div>
     </div>
-
+    <div class="tvc">
+      <div class="tvch">
+        <div class="tvct"><span class="tick">OTHERS</span><span class="tdesc">· ex-Top 10</span></div>
+        <span class="tag r">Small Caps</span>
+      </div>
+      <div style="flex:1"><div id="tv-others" style="height:360px;width:100%;"></div></div>
+      <div id="notes-others" class="notes-panel"></div>
+    </div>
   </div>
 </div>
 
-<!-- SECCIÓN: TOTAL2 + TOTAL3 + OTHERS -->
+<!-- HYPE -->
 <div class="section">
-  <div class="section-title">
-    <h2>Altcoins · TOTAL2, TOTAL3 &amp; OTHERS</h2>
-    <div class="section-line"></div>
-  </div>
-  <div class="chart-grid-secondary">
-
-    <!-- TOTAL2 -->
-    <div class="tv-card" style="height:420px;">
-      <div class="tv-card-header">
-        <div class="tv-card-title">
-          <span class="ticker-badge">TOTAL2</span>
-          <span class="ticker-desc">· ex-Bitcoin</span>
-        </div>
-        <span class="tv-tag green">Alts + ETH</span>
+  <div class="stitle"><h2>HYPE · Hyperliquid</h2><div class="sline"></div></div>
+  <div class="g2">
+    <div class="tvc">
+      <div class="tvch">
+        <div class="tvct"><span class="tick">HYPE/USDT</span><span class="tdesc">· KuCoin</span></div>
+        <span class="tag c">HYPE</span>
       </div>
-      <div class="tv-widget-wrap" style="height:370px; flex:1;">
-        <div class="tradingview-widget-container" style="height:370px;width:100%;position:relative;">
-          <div id="tv-total2" style="height:370px;width:100%;"></div>
-        </div>
-        <button class="save-drawings-btn" onclick="saveCurrentDrawings('total2')">💾 Guardar</button>
-      </div>
+      <div style="flex:1"><div id="tv-hype" style="height:400px;width:100%;"></div></div>
+      <div id="notes-hype" class="notes-panel"></div>
     </div>
-
-    <!-- TOTAL3 -->
-    <div class="tv-card" style="height:420px;">
-      <div class="tv-card-header">
-        <div class="tv-card-title">
-          <span class="ticker-badge">TOTAL3</span>
-          <span class="ticker-desc">· ex-BTC &amp; ex-ETH</span>
-        </div>
-        <span class="tv-tag purple">Altcoins Puras</span>
+    <div class="tvc">
+      <div class="tvch">
+        <div class="tvct"><span class="tick">HYPE/BTC</span><span class="tdesc">· KuCoin ÷ Binance · Ratio relativo</span></div>
+        <span class="tag g">HYPE vs BTC</span>
       </div>
-      <div class="tv-widget-wrap" style="height:370px; flex:1;">
-        <div class="tradingview-widget-container" style="height:370px;width:100%;position:relative;">
-          <div id="tv-total3" style="height:370px;width:100%;"></div>
-        </div>
-        <button class="save-drawings-btn" onclick="saveCurrentDrawings('total3')">💾 Guardar</button>
-      </div>
+      <div style="flex:1"><div id="tv-hypebtc" style="height:400px;width:100%;"></div></div>
+      <div id="notes-hypebtc" class="notes-panel"></div>
     </div>
-
-    <!-- OTHERS -->
-    <div class="tv-card" style="height:420px;">
-      <div class="tv-card-header">
-        <div class="tv-card-title">
-          <span class="ticker-badge">OTHERS</span>
-          <span class="ticker-desc">· ex-Top 10</span>
-        </div>
-        <span class="tv-tag" style="color:var(--red); border-color:rgba(255,77,109,0.3); background:rgba(255,77,109,0.08);">Small Caps</span>
-      </div>
-      <div class="tv-widget-wrap" style="height:370px; flex:1;">
-        <div class="tradingview-widget-container" style="height:370px;width:100%;position:relative;">
-          <div id="tv-others" style="height:370px;width:100%;"></div>
-        </div>
-        <button class="save-drawings-btn" onclick="saveCurrentDrawings('others')">💾 Guardar</button>
-      </div>
-    </div>
-
-  </div>
-</div>
-
-<!-- SECCIÓN: HYPE + HYPE/BTC -->
-<div class="section">
-  <div class="section-title">
-    <h2>HYPE · Hyperliquid</h2>
-    <div class="section-line"></div>
-  </div>
-  <div class="chart-grid-hype">
-
-    <!-- HYPE/USDT -->
-    <div class="tv-card" style="height:460px;">
-      <div class="tv-card-header">
-        <div class="tv-card-title">
-          <span class="ticker-badge">HYPE/USDT</span>
-          <span class="ticker-desc">· KuCoin · Hyperliquid</span>
-        </div>
-        <span class="tv-tag cyan">HYPE</span>
-      </div>
-      <div class="tv-widget-wrap" style="height:410px; flex:1;">
-        <div class="tradingview-widget-container" style="height:410px;width:100%;position:relative;">
-          <div id="tv-hype" style="height:410px;width:100%;"></div>
-        </div>
-        <button class="save-drawings-btn" onclick="saveCurrentDrawings('hype')">💾 Guardar dibujos</button>
-      </div>
-    </div>
-
-    <!-- HYPE/BTC -->
-    <div class="tv-card" style="height:460px;">
-      <div class="tv-card-header">
-        <div class="tv-card-title">
-          <span class="ticker-badge">HYPE/BTC</span>
-          <span class="ticker-desc">· KuCoin ÷ Binance · Ratio relativo</span>
-        </div>
-        <span class="tv-tag gold">HYPE vs BTC</span>
-      </div>
-      <div class="tv-widget-wrap" style="height:410px; flex:1;">
-        <div class="tradingview-widget-container" style="height:410px;width:100%;position:relative;">
-          <div id="tv-hypebtc" style="height:410px;width:100%;"></div>
-        </div>
-        <button class="save-drawings-btn" onclick="saveCurrentDrawings('hypebtc')">💾 Guardar dibujos</button>
-      </div>
-    </div>
-
   </div>
 </div>
 
 <!-- FOOTER -->
 <footer class="footer">
-  <div class="footer-note">
-    Dashboard de análisis cripto. Datos en tiempo real vía TradingView. Las velas y dibujos se almacenan en Firebase Realtime Database.
-  </div>
-  <div class="footer-dev">
-    Desarrollado por <span>Juan Campos</span>
-  </div>
+  <div class="footer-note">Dashboard de análisis cripto · Datos en tiempo real vía TradingView · Notas sincronizadas con Firebase</div>
+  <div class="footer-dev">Desarrollado por <span>Juan Campos</span></div>
 </footer>
 
-<!-- TOAST -->
 <div id="toast"></div>
 
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <script>
-  window._tvWidgets = window._tvWidgets || {};
+/* ═══════════════════════════════════════════
+   NOTAS POR GRÁFICO — SISTEMA COMPLETO
+   ═══════════════════════════════════════════ */
 
-  function showToast(msg) {
-    var t = document.getElementById('toast');
-    t.textContent = msg;
-    t.classList.add('show');
-    setTimeout(function() { t.classList.remove('show'); }, 3000);
+var WIDGETS = [
+  { id:'btcusdt', label:'BTC/USDT',    symbol:'BINANCE:BTCUSDT',                 h:620,
+    studies:[
+      {id:'MASimple@tv-basicstudies',inputs:{length:147}},
+      {id:'MAExp@tv-basicstudies',   inputs:{length:140}},
+      {id:'MACD@tv-basicstudies'},
+      {id:'RSI@tv-basicstudies'}
+    ]},
+  { id:'btcd',    label:'BTC.D',       symbol:'CRYPTOCAP:BTC.D',                 h:400 },
+  { id:'total',   label:'TOTAL',       symbol:'CRYPTOCAP:TOTAL',                 h:400 },
+  { id:'total2',  label:'TOTAL2',      symbol:'CRYPTOCAP:TOTAL2',                h:360 },
+  { id:'total3',  label:'TOTAL3',      symbol:'CRYPTOCAP:TOTAL3',                h:360 },
+  { id:'others',  label:'OTHERS',      symbol:'CRYPTOCAP:OTHERS',                h:360 },
+  { id:'hype',    label:'HYPE/USDT',   symbol:'KUCOIN:HYPEUSDT',                 h:400 },
+  { id:'hypebtc', label:'HYPE/BTC',    symbol:'KUCOIN:HYPEUSDT/BINANCE:BTCUSDT', h:400 }
+];
+
+var _openPanels = {};
+
+/* ── TOAST ─────────────────────────────── */
+function toast(msg, type) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show ' + (type||'');
+  clearTimeout(t._t);
+  t._t = setTimeout(function(){ t.className=''; }, 3500);
+}
+
+/* ── CONSTRUIR PANEL DE NOTAS ──────────── */
+function buildNotesPanel(wid, label) {
+  var panel = document.getElementById('notes-' + wid);
+  if (!panel) return;
+
+  panel.innerHTML =
+    '<div class="notes-header" onclick="togglePanel(\'' + wid + '\')">' +
+      '<div class="notes-header-left">' +
+        '<div class="notes-dot" id="dot-' + wid + '"></div>' +
+        '<span id="nlabel-' + wid + '" style="font-size:12px;color:var(--text-secondary);font-weight:500;">📝 Notas de análisis</span>' +
+        '<span class="notes-date" id="ndate-' + wid + '"></span>' +
+      '</div>' +
+      '<div class="notes-actions" onclick="event.stopPropagation()">' +
+        '<button class="nbtn save" onclick="saveNotes(\'' + wid + '\')">💾 Guardar</button>' +
+        '<button class="nbtn clear" onclick="clearNotes(\'' + wid + '\')">✕ Borrar</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="notes-body" id="nbody-' + wid + '">' +
+      '<div class="notes-fields">' +
+        '<div class="nfield"><label>Bias de mercado</label>' +
+          '<select id="nbias-' + wid + '">' +
+            '<option value="">— sin definir —</option>' +
+            '<option value="bull">🟢 Alcista (Bullish)</option>' +
+            '<option value="bear">🔴 Bajista (Bearish)</option>' +
+            '<option value="neutral">🟡 Neutral / Rango</option>' +
+            '<option value="wait">🟣 En espera de confirmación</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="nfield"><label>Niveles clave</label>' +
+          '<input id="nlevels-' + wid + '" type="text" placeholder="Ej: S 58k / R 72k / ATH 73.8k">' +
+        '</div>' +
+      '</div>' +
+      '<label style="display:block;font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px">Análisis y observaciones</label>' +
+      '<textarea class="notes-textarea" id="ntext-' + wid + '" placeholder="Escribe tu análisis, confluencias, zonas de interés, plan de trading..."></textarea>' +
+    '</div>' +
+    '<div class="notes-preview" id="npreview-' + wid + '"></div>';
+}
+
+/* ── TOGGLE PANEL ──────────────────────── */
+function togglePanel(wid) {
+  _openPanels[wid] = !_openPanels[wid];
+  var body    = document.getElementById('nbody-' + wid);
+  var preview = document.getElementById('npreview-' + wid);
+  if (body)    body.className    = 'notes-body'    + (_openPanels[wid] ? ' open' : '');
+  if (preview) preview.className = 'notes-preview' + (!_openPanels[wid] && _hasData(wid) ? ' open' : '');
+}
+
+function _hasData(wid) {
+  var d = window.FB_get ? window.FB_get(wid) : null;
+  return !!(d && (d.notes || d.bias || d.levels));
+}
+
+/* ── GUARDAR NOTAS ─────────────────────── */
+function saveNotes(wid) {
+  var bias   = (document.getElementById('nbias-'   + wid)||{}).value  || '';
+  var levels = (document.getElementById('nlevels-' + wid)||{}).value  || '';
+  var notes  = (document.getElementById('ntext-'   + wid)||{}).value  || '';
+
+  if (!bias && !levels && !notes.trim()) {
+    toast('Escribe algo antes de guardar', 'err'); return;
+  }
+  if (!window.FB_save) {
+    toast('Firebase no configurado — edita el HTML con tus credenciales', 'err'); return;
   }
 
-  function saveCurrentDrawings(widgetId) {
-    window.saveDrawings(widgetId, '{"saved": true, "ts": "' + new Date().toISOString() + '"}');
-  }
+  window.FB_save(wid, { bias, levels, notes }).then(function(ok) {
+    if (ok) {
+      toast('Notas guardadas ✓', 'ok');
+      _renderSavedState(wid, { bias, levels, notes, savedAt: new Date().toISOString() });
+    } else {
+      toast('Error al guardar en Firebase', 'err');
+    }
+  });
+}
 
-  // Shared TV config base
-  function makeTVConfig(symbol, containerId, height, extraStudies, upColor) {
-    return {
-      "autosize": false,
-      "width": "100%",
-      "height": height,
-      "symbol": symbol,
-      "interval": "W",
-      "timezone": "Europe/Madrid",
-      "theme": "dark",
-      "style": "1",
-      "locale": "es",
-      "toolbar_bg": "#0a1628",
-      "enable_publishing": false,
-      "hide_top_toolbar": false,
-      "hide_side_toolbar": false,
-      "hide_legend": false,
-      "save_image": true,
-      "allow_symbol_change": true,
-      "withdateranges": true,
-      "show_popup_button": true,
-      "popup_width": "1400",
-      "popup_height": "900",
-      "container_id": containerId,
-      "studies": extraStudies || [],
-      "drawings_access": { "type": "all" },
-      "backgroundColor": "#050c1a",
-      "gridColor": "rgba(56,139,253,0.06)",
-      "overrides": {
-        "mainSeriesProperties.candleStyle.upColor": upColor || "#00e5a0",
-        "mainSeriesProperties.candleStyle.downColor": "#ff4d6d",
-        "mainSeriesProperties.candleStyle.borderUpColor": upColor || "#00e5a0",
-        "mainSeriesProperties.candleStyle.borderDownColor": "#ff4d6d",
-        "mainSeriesProperties.candleStyle.wickUpColor": upColor || "#00e5a0",
-        "mainSeriesProperties.candleStyle.wickDownColor": "#ff4d6d",
-        "paneProperties.background": "#050c1a",
-        "paneProperties.backgroundType": "solid",
-        "paneProperties.vertGridProperties.color": "rgba(56,139,253,0.05)",
-        "paneProperties.horzGridProperties.color": "rgba(56,139,253,0.05)"
+/* ── BORRAR NOTAS ──────────────────────── */
+function clearNotes(wid) {
+  if (!confirm('¿Borrar las notas de este gráfico?')) return;
+  ['nbias-','nlevels-','ntext-'].forEach(function(p){
+    var el = document.getElementById(p + wid);
+    if (el) el.value = '';
+  });
+  if (window.FB_save) {
+    window.FB_save(wid, { bias:'', levels:'', notes:'' }).then(function(ok){
+      if (ok) {
+        toast('Notas borradas', '');
+        _renderEmptyState(wid);
       }
-    };
+    });
+  }
+}
+
+/* ── RENDERIZAR ESTADO GUARDADO ────────── */
+function _renderSavedState(wid, d) {
+  var dot     = document.getElementById('dot-'      + wid);
+  var label   = document.getElementById('nlabel-'   + wid);
+  var dateEl  = document.getElementById('ndate-'    + wid);
+  var preview = document.getElementById('npreview-' + wid);
+
+  if (dot)   { dot.className = 'notes-dot has-data'; }
+  if (dateEl){ dateEl.textContent = d.savedAt ? '· ' + new Date(d.savedAt).toLocaleString('es-ES') : ''; }
+
+  // Construir label con bias badge
+  var biasMap = {
+    bull:    ['bull','🟢 Alcista'],
+    bear:    ['bear','🔴 Bajista'],
+    neutral: ['neutral','🟡 Neutral'],
+    wait:    ['wait','🟣 En espera']
+  };
+  var bEntry = d.bias && biasMap[d.bias];
+  if (label) {
+    label.innerHTML = '📝 Notas' + (bEntry ? ' &nbsp;<span class="bias-badge bias-' + bEntry[0] + '">' + bEntry[1] + '</span>' : '');
   }
 
-  function initWidgets() {
+  // Preview colapsado
+  if (preview) {
+    var lines = [];
+    if (d.levels) lines.push('📍 Niveles: ' + d.levels);
+    if (d.notes && d.notes.trim()) lines.push(d.notes.trim());
+    preview.textContent = lines.join('\n');
+    if (!_openPanels[wid]) preview.className = 'notes-preview open';
+  }
+
+  // Rellenar campos
+  var biasEl   = document.getElementById('nbias-'   + wid);
+  var levelsEl = document.getElementById('nlevels-' + wid);
+  var textEl   = document.getElementById('ntext-'   + wid);
+  if (biasEl   && d.bias)   biasEl.value   = d.bias;
+  if (levelsEl && d.levels) levelsEl.value = d.levels;
+  if (textEl   && d.notes)  textEl.value   = d.notes;
+}
+
+function _renderEmptyState(wid) {
+  var dot     = document.getElementById('dot-'      + wid);
+  var label   = document.getElementById('nlabel-'   + wid);
+  var dateEl  = document.getElementById('ndate-'    + wid);
+  var preview = document.getElementById('npreview-' + wid);
+  if (dot)     dot.className     = 'notes-dot';
+  if (label)   label.textContent = '📝 Notas de análisis';
+  if (dateEl)  dateEl.textContent = '';
+  if (preview) { preview.textContent = ''; preview.className = 'notes-preview'; }
+}
+
+/* ── INIT WIDGETS TV ───────────────────── */
+function initTV() {
+  WIDGETS.forEach(function(def) {
     try {
-      // BTC/USDT principal con indicadores
-      window._tvWidgets['btcusdt'] = new TradingView.widget(makeTVConfig(
-        "BINANCE:BTCUSDT", "tv-btcusdt", 620,
-        [
-          { "id": "MASimple@tv-basicstudies", "inputs": { "length": 147 } },
-          { "id": "MAExp@tv-basicstudies",    "inputs": { "length": 140 } },
-          { "id": "MACD@tv-basicstudies" },
-          { "id": "RSI@tv-basicstudies" }
-        ],
-        "#00e5a0"
-      ));
+      new TradingView.widget({
+        autosize: false, width:'100%', height: def.h,
+        symbol: def.symbol, interval:'W',
+        timezone:'Europe/Madrid', theme:'dark', style:'1', locale:'es',
+        toolbar_bg:'#0a1628',
+        enable_publishing:false,
+        hide_top_toolbar:false,
+        hide_side_toolbar:false,
+        hide_legend:false,
+        save_image:true,
+        allow_symbol_change:true,
+        withdateranges:true,
+        show_popup_button:true,
+        popup_width:'1400', popup_height:'900',
+        container_id:'tv-' + def.id,
+        studies: def.studies || [],
+        drawings_access:{ type:'all' },
+        backgroundColor:'#050c1a',
+        gridColor:'rgba(56,139,253,0.05)',
+        overrides:{
+          'paneProperties.background':'#050c1a',
+          'paneProperties.backgroundType':'solid',
+          'paneProperties.vertGridProperties.color':'rgba(56,139,253,0.04)',
+          'paneProperties.horzGridProperties.color':'rgba(56,139,253,0.04)',
+          'mainSeriesProperties.candleStyle.upColor':'#00e5a0',
+          'mainSeriesProperties.candleStyle.downColor':'#ff4d6d',
+          'mainSeriesProperties.candleStyle.borderUpColor':'#00e5a0',
+          'mainSeriesProperties.candleStyle.borderDownColor':'#ff4d6d',
+          'mainSeriesProperties.candleStyle.wickUpColor':'#00e5a0',
+          'mainSeriesProperties.candleStyle.wickDownColor':'#ff4d6d'
+        }
+      });
+    } catch(e) { console.warn('Widget error ' + def.id, e); }
+  });
+}
 
-      // BTC Dominance
-      window._tvWidgets['btcd'] = new TradingView.widget(makeTVConfig(
-        "CRYPTOCAP:BTC.D", "tv-btcd", 410, [], "#00d4ff"
-      ));
+/* ── ARRANQUE ──────────────────────────── */
+// Construir paneles de notas
+WIDGETS.forEach(function(def) { buildNotesPanel(def.id, def.label); });
 
-      // TOTAL
-      window._tvWidgets['total'] = new TradingView.widget(makeTVConfig(
-        "CRYPTOCAP:TOTAL", "tv-total", 410, [], "#f0c040"
-      ));
-
-      // TOTAL2
-      window._tvWidgets['total2'] = new TradingView.widget(makeTVConfig(
-        "CRYPTOCAP:TOTAL2", "tv-total2", 370, [], "#00e5a0"
-      ));
-
-      // TOTAL3
-      window._tvWidgets['total3'] = new TradingView.widget(makeTVConfig(
-        "CRYPTOCAP:TOTAL3", "tv-total3", 370, [], "#a78bfa"
-      ));
-
-      // OTHERS
-      window._tvWidgets['others'] = new TradingView.widget(makeTVConfig(
-        "CRYPTOCAP:OTHERS", "tv-others", 370, [], "#ff6b6b"
-      ));
-
-      // HYPE/USDT
-      window._tvWidgets['hype'] = new TradingView.widget(makeTVConfig(
-        "KUCOIN:HYPEUSDT", "tv-hype", 410, [], "#00d4ff"
-      ));
-
-      // HYPE/BTC ratio
-      window._tvWidgets['hypebtc'] = new TradingView.widget(makeTVConfig(
-        "KUCOIN:HYPEUSDT/BINANCE:BTCUSDT", "tv-hypebtc", 410, [], "#f0c040"
-      ));
-
-    } catch(e) {
-      console.warn("TV init error:", e);
+// Cargar datos guardados en Firebase (con reintento si Firebase no está listo aún)
+function loadSavedData() {
+  WIDGETS.forEach(function(def) {
+    var d = window.FB_get ? window.FB_get(def.id) : null;
+    if (d && (d.notes || d.bias || d.levels || d.savedAt)) {
+      _renderSavedState(def.id, d);
     }
-  }
+  });
+}
+// Intentar ahora y de nuevo cuando Firebase actualice
+setTimeout(loadSavedData, 1500);
+setTimeout(loadSavedData, 4000);
 
-  // Esperar a que tv.js esté disponible
-  if (typeof TradingView !== 'undefined') {
-    initWidgets();
-  } else {
-    document.querySelector('script[src*="tv.js"]').addEventListener('load', initWidgets);
-  }
-
-  // Reloj en header
-  function updateClock() {
-    var now = new Date();
-    var opts = { weekday:'short', day:'2-digit', month:'short', year:'numeric',
-                 hour:'2-digit', minute:'2-digit', timeZone:'Europe/Madrid' };
-    var el = document.getElementById('session-count');
-    if (el && !el.textContent) {
-      el.textContent = now.toLocaleDateString('es-ES', opts);
-    }
-  }
-  updateClock();
-  setInterval(updateClock, 60000);
+// Init TradingView
+if (typeof TradingView !== 'undefined') {
+  initTV();
+} else {
+  document.querySelector('script[src*="tv.js"]').addEventListener('load', initTV);
+}
 </script>
-
 </body>
 </html>
